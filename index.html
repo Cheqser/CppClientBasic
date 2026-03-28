@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Minecraft for Windowsのクライアント開発の基礎</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css">
+    <style>
+      @media screen and (min-width: 769px) {
+        .sticky-menu {
+          position: sticky;
+          top: 2rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+  <section class="section">
+    <div class="container">
+      <div class="columns">
+
+        <aside class="column is-3">
+          <div class="menu sticky-menu">
+            <ul class="menu-list">
+              <li><a href="#intro" class="is-active">はじめに</a></li>
+            </ul>
+            <p class="menu-label">本編</p>
+            <ul class="menu-list">
+              <li><a href="#createProject">プロジェクトの作成</a></li>
+              <li><a href="#dllmain">dllmain.cppのセットアップ</a></li>
+              <li><a href="#gamehook">ゲーム関数のフック</a></li>
+            </ul>
+            <p class="menu-label">番外編</p>
+            <ul class="menu-list">
+              <li><a href="#variable-function">変数・関数</a></li>
+              <li><a href="#datatype">データ型</a></li>
+              <li><a href="#declaration-definition">宣言・定義</a></li>
+              <li><a href="#structures">構造体</a></li>
+              <li><a href="#const">定数</a></li>
+              <li><a href="#forbeautifulcode">コードを綺麗に書くために</a></li>
+            </ul>
+          </div>
+        </aside>
+
+        <main class="column is-9">
+          <div class="content">
+            <h1 id="intro" class="title">はじめに</h1>
+            <p>ここでは、Minecraft for Windowsにおける改造クライアントの開発の基礎を解説します。コードの書き方は、概ねIrisクライアントに改善を加えたものを参考にします。以下の前提条件を確認し、次のステップに進んでください。</p>
+
+            <h2>前提</h2>
+            <p>✅ Visual Studio 2026をインストールしている</p>
+            <p>✅ Minecraft for Windows（バージョン26.10以上）をインストールしている</p>
+
+            <p>※以降の解説はあくまでも基礎であり、<strong>安全</strong>かつ<strong>最適</strong>であるとは言えません。</p>
+            <hr>
+
+            <div style="height: 200px;"></div> <h1 id="createProject" class="title">プロジェクトの作成</h1>
+            <p>それでは、プロジェクトを作成しましょう。Visual Studioを開き、右上にある「Create a new project」をクリックします。日本語で使用している人は、次の写真を参考にしてください。</p>
+            <img src="./images/newProject1.png" alt="">
+            <p>次に、プロジェクトの種類「Dynamic-Link Library (DLL)」を選択し、ダブルクリックしてください。</p>
+            <img src="./images/newProject2.png" alt="">
+            <p>プロジェクトを作成します。プロジェクトの名前とファイルパスを指定し、右下の「Create」をクリックします。</p>
+            <img src="./images/newProject3.png" alt="">
+            <p>（この後のプロパティ設定についての説明は端折ります。）</p>
+            <hr>
+
+            <div style="height: 200px;"></div> <h1 id="dllmain" class="title">dllmain.cppのセットアップ</h1>
+            <p>dllmain.cppは、アドレス（シグネチャやオフセット）や機能（フックやモジュール）の初期化・解放など、クライアントの基本処理のすべてを司る重要なファイルの1つです。初期状態では、pch.hのインクルードに加え、<code>DllMain</code>関数が用意されています。</p>
+            <p>アドレスや機能の初期化は、初期化用のスレッド関数にて行います。ここでは<code>DWORD InitializeClient(HMODULE hModule)</code>を初期化スレッドとして定義します。</p>
+            <p>また、Irisクライアントではプリコンパイル済みヘッダ（pch）を使用しないため、pch.hの代わりに、まずWindows.hをインクルードしてください。以上を踏まえたdllmain.cppのコード例を以下に提示します。</p>
+            <pre><code class="language-cpp">
+            #include &lt;windows.h&gt;
+
+            DWORD InitializeClient(HMODULE hModule) {
+              return 0;
+            }
+
+            BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+              if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+                DisableThreadLibraryCalls(hModule);
+                CreateThread(0, 0, (LPTHREAD_START_ROUTINE)InitializeClient, hModule, 0, 0);
+              }
+              return TRUE;
+            }
+            </code></pre>
+            <hr>
+
+            <div style="height: 200px;"></div> <h1 id="gamehook" class="title">ゲーム関数のフック</h1>
+            <p>ここからは、ゲーム内の関数をフックする方法を解説します。ここでは<strong>safetyhook</strong>と<strong>libhat</strong>を使用します。また、今回はKeymapを例にフックします。</p>
+            <p>Keymapは、関数<code>void Keyboard::_feed(Keyboard* this, __int32 key, bool held)</code>のことを指し、ホットキーの指定に使用されます。</p>
+            <p>まずは<code>Keyboard::_feed</code>のシグネチャを取得します。取得方法はYouTubeに投稿されているものなどを参考にしてください。（<a href="https://www.youtube.com/watch?v=jIZnWKZwjVc">https://www.youtube.com/watch?v=jIZnWKZwjVc</a>）</p>
+            <p>26.10現在でのシグネチャは<code>4C 8B DC 48 81 EC ? ? ? ? 81 FA</code>です。これをアドレスとしてフックします。</p>
+            <p>まず、このシグネチャをスキャンする関数を用意します。dllmain.cppとは別のファイルに用意することを推奨します。以下に、libhatを用いた例を提示します。</p>
+            <pre><code class="language-cpp">
+            static hat::scan_result scanSig(std::string_view sig) {
+            	auto parsed_sig = hat::parse_signature(sig);
+            	const auto result = hat::find_pattern(parsed_sig.value(), ".text");
+            	return result;
+            }
+            </code></pre>
+            <p>次に、フックを管理するファイルを作成します。以下にコード例を提示します。</p>
+            <pre><code class="language-cpp">
+            #pragma once
+
+            class FuncHook {
+            public:
+              virtual void Initialize() = 0;
+            }
+
+            #include "Hooks/Keymap.h"
+
+            void InitializeHooks() {
+              static FuncHook* hooks[] = {
+                &KeymapHook::Instance()
+              };
+
+              for (std::size_t i = 0; i &lt; std::size(hooks); ++i) {
+                hooks[i]->Initialize();
+              }
+            }
+            </code></pre>
+            <p>この時点ではKeymap.hとその中身を作成していないためエラーが出ていますが、後に解消されます。</p>
+            <p>次に、Keymapをフックするファイルを作成します。フックを管理するファイルと同じディレクトリにHooksというフォルダを作成し、その中にフックするファイルを作成することを推奨します。以下にコード例を提示します。</p>
+            <pre><code class="language-cpp">
+            #pragma once
+
+            safetyhook::InlineHook oKey;
+
+            void KeymapDetour(void* _this, __int32 key, bool held) {
+              auto& hook = oKey;
+              hook.call&lt;void&gt;(_this, key, held);
+            }
+
+            class KeymapHook : public FuncHook {
+            public:
+              void Initialize() {
+                uintptr_t sig = scanSig("4C 8B DC 48 81 EC ? ? ? ? 81 FA");
+                oKey = safetyhook::create_inline(sig, (void*)&KeymapDetour);
+              }
+
+              static KeymapHook& Instance() {
+                static KeymapHook instance;
+                return instance;
+              }
+            }
+            </code></pre>
+            フックの仕組みは完成したので、dllmain.cppの<code>DWORD InitializeClient(HMODULE hModule)</code>関数内にフックを初期化する処理を加えます。以下にコード例を提示します。
+            <pre><code>
+            DWORD InitializeClient(HMODULE hModule) {
+              InitializeHooks();
+
+              return 0;
+            }
+            </code></pre>
+            以上で、Keymapのフックが完成されました。
+            <hr>
+
+            <div style="height: 200px;"></div> <h1 id="variable-function" class="title">変数・関数</h1>
+            <p><strong>変数</strong>とは、数値や文字列などの値を記憶・変更するための「名前付きのコンテナ」のことです。以下が変数の例です。</p>
+            <pre><code>
+            bool boolean = true;
+            int integer = 50;
+            float fraction = 20.f;
+            std::string text = "abc";
+            std::vector&lt;int&gt; intVec;
+            </code></pre>
+            <p><strong>関数</strong>とは、特定の処理をまとめて、必要な時に再利用できるコードの「名前付きのブロック」のことです。以下が関数の例です。</p>
+            <pre><code>
+            void funcA() {
+              std::cout &lt;&lt; "This is a message from funcA" &lt;&lt; std::endl;
+            }
+
+            bool funcB() {
+              return true;
+            }
+
+            float funcC() {
+              return 5.f;
+            }
+            </code></pre>
+            <p>関数は、<strong>引数</strong>と呼ばれる値を持つことができます。引数とは、関数を呼び出す際に、その関数に処理に必要なデータを受け渡すための変数や値のことを指します。例としては、
+              <code>void funcD(const std::string& str, bool state, int index)</code>などです。</p>
+            <p>この丸括弧の中にカンマで区切られて並んだ引数の集合を<strong>引数リスト</strong>と呼びます。</p>
+            <hr>
+
+            <div style="height: 200px;"></div> <h1 id="datatype" class="title">データ型</h1>
+            <p>C++には、<strong>データ型</strong>と呼ばれるものが存在します。これは、変数の種類を定めるのに使うもので、代表的な物は、<code>bool</code>、<code>int</code>、<code>float</code>などがあります。</p>
+            <p><strong>bool</strong> = true/falseで表す。</p>
+            <p><strong>int</strong> = 整数。</p>
+            <p><strong>float</strong> = 小数。</p>
+            <hr>
+
+            <div style="height: 200px"></div> <h1 id="declaration-definition" class="title">宣言・定義</h1>
+            <p>関数や変数の存在をコンパイラに紹介することを、関数や変数を<strong>宣言</strong>するといいます。以下が例です。</p>
+            <pre><code>
+            int mode; // 変数 "mode" を宣言
+            void func(int index); // 関数 "func" を宣言
+            </code></pre>
+            <p>宣言した関数や変数の内容を明確にすることを、関数や変数を<strong>定義</strong>するといいます。以下が例です。</p>
+            <pre><code>
+            int Class::mode = 0; // 構造体 "Class" で宣言した変数 "mode" を具体化。
+
+            void Class::func(int index) {
+              if (index &lt; 10) {
+                std::cout &lt;&lt; "current index is smaller than 10" &lt;&lt; std::endl;
+              }
+            } // 構造体 "Class" で宣言した関数 "func" を具体化。
+            </code></pre>
+            <p>※宣言を行わず、定義のみを行うケースもあります。</p>
+            <hr>
+
+            <div style="height: 200px"></div> <h1 id="structures" class="title">構造体</h1>
+            <p>「データ」と「処理」をまとめたものを<strong>構造体</strong>と呼び、これには<code>class</code>と<code>struct</code>の2種類があります。</p>
+            <p>構造体は3つの<strong>アクセス修飾子</strong>を持ちます。アクセス修飾子の役割は、クラスのメンバ（変数や関数）にどこからであればアクセスできるかを指定することです。これには、<code>public:</code>、<code>private:</code>、<code>protected:</code>があります。</p>
+            <p><code>public:</code>は、クラス内、継承先の子クラス内、クラス外の全てからアクセスできます。</p>
+            <p><code>private:</code>は、クラス内からのみアクセスできます。</p>
+            <p><code>protected:</code>は、クラス内と継承先の子クラス内からアクセスできます。</p>
+            <p>実際のアクセス修飾子を指定するには、以下のようにコードを記述します。</p>
+            <pre><code>
+            class Parent {
+            public:
+              int publicVar = 0; // 親クラス、子クラス、クラス外
+            private:
+              int privateVar = 0; // 親クラス
+            protected:
+              int protectedVar = 0; // 親クラス、子クラス
+            }
+            </code></pre>
+            <p>ただし上記のコードは<code>class</code>の場合であり、<code>struct</code>の場合は元が<code>public:</code>の状態になっています。</p>
+            <hr>
+
+            <div style="height: 200px"></div> <h1 id="const" class="title">定数</h1>
+            <p>確定され、変化することのない値を<strong>定数</strong>といいます。定数を定めるには、<code>const</code>と<code>constexpr</code>という2つの型修飾子を使うことができます。</p>
+            <p>
+              2つの型修飾子の大きな違いは、<strong>値が確定するタイミング</strong>にあります。
+              <code>const</code>は、<strong>プログラムを実行している最中</strong>に値が確定します。
+              一方で<code>constexpr</code>は、<strong>コンパイル時</strong>に値が確定するので、変数を定義した時点で値を1つに確定している必要があります。
+            </p>
+            <p>以下が例です。</p>
+            <pre><code>
+            // const -> コンパイル時に値が確定しないため、ランダムな値を持つことができる。
+            const int var1 = rand();
+
+            // constexpr -> コンパイル時に値が確定するため、一つの値しか持つことができない。
+            constexpr int var2 = 500;
+            </code></pre>
+            上で記述したように、<code>constexpr</code>はコンパイル時に値が確定するため、必然的に計算の回数が減り、パフォーマンスの向上に繋がります。
+            <hr>
+
+            <div style="height: 200px"></div> <h1 id="forbeautifulcode" class="title">コードを綺麗に書くために</h1>
+            <p>C++に限らず、プログラミングではソースを閲覧する人にとって可読性が高く、安全なコードを意識することが大切です。以下に改善が見込めるコードの例を提示します。</p>
+            <pre><code>
+            void findplayer() {
+              if (ClientInstance::get()->getLocalPlayer() == nullptr) {
+                return;
+              }
+
+              for (auto& actors : ClientInstance::get()->getLocalPlayer()->getLevel()->getRuntimeActorList()) {
+                if (actors == nullptr || actors == ClientInstance::get()->getLocalPlayer()) {
+                  continue;
+                }
+              }
+            }
+            </code></pre>
+            <p>このコードの改善点を解説します。まず、関数名についてです。主にC++では、関数や変数に熟語の名前をつける際、<strong>一語目は小文字からはじめ、二語目以降は一文字目を大文字から始める</strong>傾向にあります。なので、ここでは関数名を<code>findPlayer()</code>とすると良いです。</p>
+            <p>次に、条件文についてです。<code>getLocalPlayer()</code>など、何度も登場する関数は<strong>序盤で一つの変数に格納しておく</strong>べきです。例として以下のようになります。</p>
+            <pre><code>
+            auto player = ClientInstance::get()->getLocalPlayer();
+            </code></pre>
+            <p>また、<strong>{}（ブロック）</strong>の使う場面についてですが、これに関してはTPOで考える必要があり、通常、<strong>条件文でブロックを用いるのは、複数の処理をある条件下で行うとき。</strong>です今回の場合、2つのif文が登場していますが、どちらも一つの処理のみを行っているので、必ずではありませんが、ブロックは不要といえます。</p>
+            <p>加えて、プレイヤーが存在しない場合を条件とするには、<code>player == nullptr</code>よりも<code>!player</code>の方が短く可読性が高いと考えられます。</p>
+            <p>以上を踏まえて修正したコードは以下のようになります。</p>
+            <pre><code>
+            void findPlayer() {
+              auto player = ClientInstance::get()->getLocalPlayer();
+              if (!player) return;
+
+              for (auto& actors : player->getLevel()->getRuntimeActorList()) {
+                if (!actors || actors == player) continue;
+              }
+            }
+            </code></pre>
+            <p>これらの点に注意するだけで、今回の場合3行も削ることができるのです。不要なコードは後の開発やアプリの進行に大きく影響を与えるため、可読性と安全性を意識してコードを書くようにしましょう。</p>
+            <hr>
+
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+  </body>
+</html>
