@@ -204,7 +204,7 @@
               static class ClientInstance* ClientInstance;
             };
             </code></pre>
-            <p><code>ScreenView::setupAndRender</code>関数をフックするファイルに、Detour関数を次のように記述します。</p>
+            <p><code>ScreenView::setupAndRender</code>関数をフックするファイルに、Detour関数を次のように定義します。</p>
             <pre><code>
             safetyhook::InlineHook oRender;
 
